@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#6c63ff" />
+    <meta name="description"
+        content="CivicPulse Accountability Dashboard — Real-time SLA monitoring, state machine transitions, and escalation tracking for municipal officers." />
+    <title>CivicPulse — Accountability Dashboard</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="stylesheet" href="index.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="dashboard.css" />
+</head>
+
+<body>
+
+    <!-- Offline Banner -->
+    <div id="offline-banner" class="offline-banner" aria-live="polite" hidden>
+        <span class="offline-icon">📡</span>
+        <span>You're offline — dashboard data may be stale</span>
+    </div>
+
+    <!-- Toast -->
+    <div id="dash-toast" class="toast" aria-live="polite" hidden>
+        <span class="toast-icon">✅</span>
+        <span id="dash-toast-msg">Done</span>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-inner">
+            <div class="logo">
+                <span class="logo-icon">🏛️</span>
+                <div>
+                    <span class="logo-name">CivicPulse</span>
+                    <span class="logo-tagline">Accountability Dashboard</span>
+                </div>
+            </div>
+            <nav class="header-nav">
+                <a href="/" class="nav-link">📋 Report Issue</a>
+                <a href="/analytics.html" class="nav-link">🔍 Transparency</a>
+                <span class="badge badge-phase3">Phase 3</span>
+                <span id="online-dot" class="online-dot"></span>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Hero / Summary Bar -->
+    <section class="dash-hero">
+        <div class="dash-hero-bg"></div>
+        <div class="dash-summary">
+            <div class="summary-card" id="stat-total">
+                <span class="stat-num" id="s-total">—</span>
+                <span class="stat-lbl">Total Active</span>
+            </div>
+            <div class="summary-card stat-ok" id="stat-track">
+                <span class="stat-num" id="s-track">—</span>
+                <span class="stat-lbl">✅ On Track</span>
+            </div>
+            <div class="summary-card stat-warn" id="stat-warn">
+                <span class="stat-num" id="s-warn">—</span>
+                <span class="stat-lbl">⚠️ Warning (72h)</span>
+            </div>
+            <div class="summary-card stat-urgent" id="stat-urgent">
+                <span class="stat-num" id="s-urgent">—</span>
+                <span class="stat-lbl">🔴 Urgent (120h)</span>
+            </div>
+            <div class="summary-card stat-critical" id="stat-crit">
+                <span class="stat-num" id="s-crit">—</span>
+                <span class="stat-lbl">🚨 Critical (168h)</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Controls -->
+    <div class="dash-controls">
+        <div class="filter-group">
+            <label class="filter-lbl">State Filter</label>
+            <div class="filter-pills">
+                <button class="fpill active" data-filter="all" id="f-all">All</button>
+                <button class="fpill" data-filter="SUBMITTED" id="f-sub">Submitted</button>
+                <button class="fpill" data-filter="VERIFIED" id="f-ver">Verified</button>
+                <button class="fpill" data-filter="ASSIGNED" id="f-asgn">Assigned</button>
+                <button class="fpill" data-filter="IN_PROGRESS" id="f-ip">In Progress</button>
+                <button class="fpill" data-filter="RESOLVED" id="f-res">Resolved</button>
+            </div>
+        </div>
+        <div class="refresh-group">
+            <span id="last-updated" class="last-updated">—</span>
+            <button id="refresh-btn" class="btn-refresh" title="Refresh dashboard">🔄 Refresh</button>
+        </div>
+    </div>
+
+    <!-- Dashboard Grid -->
+    <main class="dash-grid-wrap">
+        <div id="dash-grid" class="dash-grid">
+            <div class="dash-loading" id="dash-loading">
+                <div class="loading-spinner"></div>
+                <p>Loading reports…</p>
+            </div>
+        </div>
+        <p id="dash-empty" class="dash-empty" hidden>No reports found matching this filter.</p>
+    </main>
+
+    <!-- Officer Transition Modal -->
+    <div id="transition-modal" class="modal-overlay" hidden>
+        <div class="modal-card glass-card">
+            <div class="modal-header">
+                <span class="modal-icon" id="modal-icon">🔧</span>
+                <div>
+                    <span class="modal-title" id="modal-title">Transition Report</span>
+                    <span class="modal-sub" id="modal-sub">Applying state change…</span>
+                </div>
+                <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
+            </div>
+
+            <div id="modal-geo-warning" class="geo-warning" hidden>
+                <span>📍</span>
+                <span>Acquiring your GPS location — this is required to confirm you are on-site (within 100m).</span>
+            </div>
+
+            <div id="modal-geo-error" class="geo-error" hidden>
+                <span>⚠️</span>
+                <span id="modal-geo-error-msg">GPS unavailable.</span>
+            </div>
+
+            <div class="modal-actions">
+                <button id="modal-confirm" class="btn btn-primary" disabled>
+                    <span id="modal-confirm-icon">✅</span>
+                    <span id="modal-confirm-label">Confirm Transition</span>
+                </button>
+                <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="app-footer">
+        <p>CivicPulse Phase 3 · Accountability Engine · State Machine + SLA Escalation + Geo-fence Enforcement</p>
+    </footer>
+
+    <script type="module" src="dashboard.js"></script>
+</body>
+
+</html>

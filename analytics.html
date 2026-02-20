@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#6c63ff" />
+    <meta name="description"
+        content="CivicPulse Analytics — Public transparency feed, ward rankings, and infrastructure heatmap." />
+    <title>CivicPulse — Transparency & Analytics</title>
+    <link rel="manifest" href="manifest.json" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="index.css" />
+    <link rel="stylesheet" href="analytics.css" />
+</head>
+
+<body>
+
+    <!-- Toast -->
+    <div id="toast" class="toast" aria-live="polite" hidden>
+        <span id="toast-icon">✅</span>
+        <span id="toast-msg">Done</span>
+    </div>
+
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-inner">
+            <div class="logo">
+                <span class="logo-icon">🏛️</span>
+                <div>
+                    <span class="logo-name">CivicPulse</span>
+                    <span class="logo-tagline">Transparency & Analytics</span>
+                </div>
+            </div>
+            <nav class="header-nav-right">
+                <a href="/" class="nav-pill">📋 Report</a>
+                <a href="/dashboard.html" class="nav-pill">📊 Dashboard</a>
+                <span class="badge-phase4">Phase 4</span>
+                <span id="online-dot" class="online-dot"></span>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Tab bar -->
+    <div class="tab-bar">
+        <button class="tab active" id="tab-feed" data-tab="feed">
+            <span class="tab-icon">🔍</span> Public Feed
+        </button>
+        <button class="tab" id="tab-rankings" data-tab="rankings">
+            <span class="tab-icon">🏆</span> Ward Rankings
+        </button>
+        <button class="tab" id="tab-heatmap" data-tab="heatmap">
+            <span class="tab-icon">🌡️</span> Heatmap
+        </button>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════
+       TAB 1: PUBLIC FEED
+  ════════════════════════════════════════════════════════ -->
+    <section id="panel-feed" class="tab-panel active">
+        <div class="panel-header">
+            <h2 class="panel-title">Public Proof Feed</h2>
+            <p class="panel-sub">Every resolved issue includes GPS-verified before &amp; after photos. Citizens vote to
+                accept or reject the resolution.</p>
+        </div>
+        <div id="feed-grid" class="feed-grid">
+            <div class="loading-state" id="feed-loading">
+                <div class="loading-spinner"></div>
+                <p>Loading resolved reports…</p>
+            </div>
+        </div>
+        <p id="feed-empty" class="empty-state" hidden>No resolved reports yet — check back soon.</p>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════════
+       TAB 2: WARD RANKINGS
+  ════════════════════════════════════════════════════════ -->
+    <section id="panel-rankings" class="tab-panel" hidden>
+        <div class="panel-header">
+            <h2 class="panel-title">Ward Accountability Leaderboard</h2>
+            <p class="panel-sub">Real-time ranking using:
+                <code>Score = (ResolutionRate × 0.6) + (AvgResponseTimeScore × 0.4)</code></p>
+        </div>
+        <div id="ranking-table-wrap" class="ranking-wrap">
+            <div class="loading-state" id="rankings-loading">
+                <div class="loading-spinner"></div>
+                <p>Computing rankings…</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ════════════════════════════════════════════════════════
+       TAB 3: HEATMAP
+  ════════════════════════════════════════════════════════ -->
+    <section id="panel-heatmap" class="tab-panel" hidden>
+        <div class="panel-header">
+            <h2 class="panel-title">Infrastructure Failure Heatmap</h2>
+            <p class="panel-sub">Darker red = more reports from that location. Pinpoints where infrastructure needs
+                replacement, not just repair.</p>
+            <div class="heat-controls">
+                <div class="heat-ctrl-group">
+                    <label class="ctrl-lbl" for="cat-filter">Category</label>
+                    <select id="cat-filter" class="ctrl-select">
+                        <option value="all">All Categories</option>
+                        <option value="pothole">🕳️ Pothole</option>
+                        <option value="streetlight">💡 Streetlight</option>
+                        <option value="garbage">🗑️ Garbage</option>
+                        <option value="graffiti">🎨 Graffiti</option>
+                        <option value="flooding">🌊 Flooding</option>
+                        <option value="sidewalk">🚶 Sidewalk</option>
+                    </select>
+                </div>
+                <div class="heat-ctrl-group">
+                    <label class="ctrl-lbl" for="days-filter">Time Range</label>
+                    <select id="days-filter" class="ctrl-select">
+                        <option value="30">Last 30 days</option>
+                        <option value="60">Last 60 days</option>
+                        <option value="90" selected>Last 90 days</option>
+                        <option value="365">Last year</option>
+                    </select>
+                </div>
+                <button class="btn btn-secondary" id="apply-heat-btn">Apply</button>
+                <div class="heat-stat">
+                    <span id="heat-count">—</span> reports plotted
+                </div>
+            </div>
+        </div>
+
+        <div id="map" class="leaflet-map"></div>
+
+        <!-- Repeat offenders panel -->
+        <div class="repeat-offenders-wrap">
+            <h3 class="ro-title">🔥 Repeat Infrastructure Failure Hotspots</h3>
+            <p class="ro-sub">Locations with 3+ incidents in the selected window — candidates for permanent
+                infrastructure replacement.</p>
+            <div id="ro-list" class="ro-list">
+                <div class="loading-state" id="ro-loading">
+                    <div class="loading-spinner"></div>
+                    <p>Detecting hotspots…</p>
+                </div>
+            </div>
+            <p id="ro-empty" class="empty-state" hidden>No repeat offenders in this time window. 🎉</p>
+        </div>
+    </section>
+
+    <footer class="app-footer">
+        <p>CivicPulse Phase 4 · Resolution Proof Protocol · Citizen Acceptance Voting · Ward Rankings · Heatmap
+            Analytics</p>
+    </footer>
+
+    <!-- Leaflet + Heatmap.js -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+    <script type="module" src="analytics.js"></script>
+</body>
+
+</html>

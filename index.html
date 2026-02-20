@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#6c63ff" />
+  <meta name="description"
+    content="Report civic issues from anywhere, even offline. CivicPulse handles image compression, EXIF privacy, and offline sync automatically." />
+  <title>CivicPulse — Report a Civic Issue</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="index.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+    rel="stylesheet" />
+</head>
+
+<body>
+
+  <!-- ── Offline Banner ── -->
+  <div id="offline-banner" class="offline-banner" aria-live="polite" hidden>
+    <span class="offline-icon">📡</span>
+    <span>You're offline — reports will sync when connection returns</span>
+  </div>
+
+  <!-- ── Sync Success Toast ── -->
+  <div id="sync-toast" class="toast" aria-live="polite" hidden>
+    <span class="toast-icon">✅</span>
+    <span id="sync-toast-msg">Reports synced!</span>
+  </div>
+
+  <!-- ── Header ── -->
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">🏛️</span>
+        <div>
+          <span class="logo-name">CivicPulse</span>
+          <span class="logo-tagline">Powered by citizens</span>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-pwa" title="Progressive Web App — works offline">PWA</span>
+        <a href="/dashboard.html" class="notif-btn" title="Accountability Dashboard" style="text-decoration:none;">
+          <span class="notif-icon">📊</span>
+          <span>Dashboard</span>
+        </a>
+        <a href="/analytics.html" class="notif-btn" title="Transparency & Analytics" style="text-decoration:none;">
+          <span class="notif-icon">🔍</span>
+          <span>Transparency</span>
+        </a>
+        <button id="notif-btn" class="notif-btn" type="button" title="Enable push notifications">
+          <span class="notif-icon">🔔</span>
+          <span id="notif-btn-label">Alerts</span>
+        </button>
+        <span id="online-dot" class="online-dot"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Hero ── -->
+  <section class="hero">
+    <div class="hero-glow"></div>
+    <h1 class="hero-title">Report an Issue,<br /><span class="gradient-text">From Anywhere</span></h1>
+    <p class="hero-sub">Works offline. Images compressed on-device. Your location data stays yours.</p>
+    <div class="tech-pills">
+      <span class="pill pill-sw">⚙️ Service Worker</span>
+      <span class="pill pill-ww">🧵 Web Worker</span>
+      <span class="pill pill-idb">🗄️ IndexedDB</span>
+      <span class="pill pill-sync">🔄 Background Sync</span>
+      <span class="pill pill-pg">🗺️ PostGIS</span>
+      <span class="pill pill-push">🔔 Push API</span>
+    </div>
+  </section>
+
+  <!-- ── Main Report Form ── -->
+  <main class="main-content">
+    <form id="report-form" class="glass-card report-form" novalidate>
+
+      <div class="form-section">
+        <h2 class="section-title">Issue Details</h2>
+
+        <div class="field-group">
+          <label for="category" class="field-label">Category</label>
+          <div class="select-wrapper">
+            <select id="category" name="category" required>
+              <option value="" disabled selected>Select issue type…</option>
+              <option value="pothole">🕳️ Pothole / Road Damage</option>
+              <option value="streetlight">💡 Broken Streetlight</option>
+              <option value="garbage">🗑️ Illegal Dumping / Garbage</option>
+              <option value="graffiti">🎨 Graffiti / Vandalism</option>
+              <option value="flooding">🌊 Flooding / Drainage</option>
+              <option value="sidewalk">🚶 Damaged Sidewalk</option>
+              <option value="other">📋 Other</option>
+            </select>
+            <span class="select-arrow">▾</span>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="description" class="field-label">Description</label>
+          <textarea id="description" name="description"
+            placeholder="Describe the issue in detail — location, severity, how long it's been there…" rows="4" required
+            maxlength="500"></textarea>
+          <div class="char-counter"><span id="char-count">0</span> / 500</div>
+        </div>
+
+        <div class="field-group">
+          <label for="location" class="field-label">Location</label>
+          <div class="location-row">
+            <input type="text" id="location" name="location" placeholder="Street address or landmark…" required />
+            <button type="button" id="gps-btn" class="btn btn-secondary" title="Use my GPS location">
+              <span class="btn-icon">📍</span>
+              <span>GPS</span>
+            </button>
+          </div>
+          <p id="gps-status" class="field-hint" hidden></p>
+        </div>
+      </div>
+
+      <!-- ── Photo Uploader ── -->
+      <div class="form-section">
+        <h2 class="section-title">Photo Evidence</h2>
+
+        <div id="drop-zone" class="drop-zone" role="button" tabindex="0" aria-label="Upload photo">
+          <input type="file" id="photo-input" accept="image/*" capture="environment" hidden />
+          <div class="drop-zone-inner">
+            <div class="drop-zone-icon">📷</div>
+            <p class="drop-zone-hint">Tap to take a photo or choose from gallery</p>
+            <p class="drop-zone-sub">Images are compressed & EXIF-stripped on-device before upload</p>
+          </div>
+        </div>
+
+        <!-- Compression Progress -->
+        <div id="compression-panel" class="compression-panel" hidden>
+          <div class="compression-header">
+            <span class="compression-label">🧵 Web Worker — Image Processing</span>
+            <span id="compression-pct" class="compression-pct">0%</span>
+          </div>
+          <div class="progress-track">
+            <div id="progress-bar" class="progress-bar"></div>
+          </div>
+          <div id="compression-stats" class="compression-stats" hidden>
+            <div class="stat">
+              <span class="stat-label">Original</span>
+              <span id="stat-original" class="stat-value stat-bad">—</span>
+            </div>
+            <div class="stat-arrow">→</div>
+            <div class="stat">
+              <span class="stat-label">Compressed</span>
+              <span id="stat-compressed" class="stat-value stat-good">—</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Savings</span>
+              <span id="stat-savings" class="stat-value stat-accent">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Image Preview -->
+        <div id="preview-container" class="preview-container" hidden>
+          <img id="photo-preview" class="photo-preview" alt="Report photo preview" />
+          <button type="button" id="remove-photo-btn" class="remove-photo-btn" aria-label="Remove photo">✕</button>
+        </div>
+
+        <!-- Digital Signature Card -->
+        <div id="signature-card" class="glass-card signature-card" hidden>
+          <div class="sig-header">
+            <span class="sig-icon">🔏</span>
+            <div>
+              <span class="sig-title">Digital Signature</span>
+              <span class="sig-sub">GPS-verified timestamp — proves photo recency</span>
+            </div>
+          </div>
+          <div class="sig-fields">
+            <div class="sig-field">
+              <span class="sig-key">Capture Time</span>
+              <span id="sig-timestamp" class="sig-val">—</span>
+            </div>
+            <div class="sig-field">
+              <span class="sig-key">GPS Latitude</span>
+              <span id="sig-lat" class="sig-val">—</span>
+            </div>
+            <div class="sig-field">
+              <span class="sig-key">GPS Longitude</span>
+              <span id="sig-lon" class="sig-val">—</span>
+            </div>
+            <div class="sig-field">
+              <span class="sig-key">EXIF Status</span>
+              <span class="sig-val sig-stripped">✅ Stripped — privacy protected</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Submit ── -->
+      <div class="form-actions">
+        <button type="submit" id="submit-btn" class="btn btn-primary btn-lg" disabled>
+          <span class="btn-icon">📤</span>
+          <span id="submit-label">Submit Report</span>
+        </button>
+        <p class="submit-hint">Reports are end-to-end private and stored locally when offline.</p>
+      </div>
+
+    </form>
+
+    <!-- ── Spatial Response Card (Phase 2) ── -->
+    <div id="response-card" class="glass-card response-card" hidden>
+      <div class="response-header">
+        <span class="response-icon" id="response-icon">📍</span>
+        <div>
+          <span class="response-title" id="response-title">Report Submitted</span>
+          <span class="response-sub" id="response-msg">—</span>
+        </div>
+      </div>
+      <div class="response-fields">
+        <div class="response-field" id="response-ward-row">
+          <span class="response-key">🗺️ Ward</span>
+          <span id="response-ward" class="response-val">—</span>
+        </div>
+        <div class="response-field" id="response-zone-row">
+          <span class="response-key">📌 Zone</span>
+          <span id="response-zone" class="response-val">—</span>
+        </div>
+        <div class="response-field" id="response-officer-row">
+          <span class="response-key">👤 Officer</span>
+          <span id="response-officer" class="response-val">—</span>
+        </div>
+        <div class="response-field" id="response-supporters-row" hidden>
+          <span class="response-key">🤝 Supporters</span>
+          <span id="response-supporters" class="response-val">—</span>
+        </div>
+        <div class="response-field">
+          <span class="response-key">🆔 Report ID</span>
+          <span id="response-id" class="response-val">—</span>
+        </div>
+      </div>
+      <!-- Merge / duplicate notification -->
+      <div id="merge-banner" class="merge-banner" hidden>
+        <span class="merge-icon">🤝</span>
+        <span id="merge-msg">Another neighbor just supported your report!</span>
+      </div>
+    </div>
+
+    <!-- ── Pending Queue Card ── -->
+    <div id="queue-card" class="glass-card queue-card" hidden>
+      <div class="queue-header">
+        <span class="queue-icon">🗄️</span>
+        <div>
+          <span class="queue-title">Offline Queue</span>
+          <span class="queue-sub">Reports waiting for connectivity</span>
+        </div>
+        <span id="queue-count-badge" class="queue-badge">0</span>
+      </div>
+      <ul id="queue-list" class="queue-list"></ul>
+    </div>
+
+  </main>
+
+  <!-- ── Footer ── -->
+  <footer class="app-footer">
+    <p>CivicPulse Phase 2 · Service Worker + Web Worker + IndexedDB + Background Sync + PostGIS Spatial Brain</p>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+
+</html>

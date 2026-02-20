@@ -1,0 +1,33 @@
+{
+  "name": "CivicPulse — Report Issues",
+  "short_name": "CivicPulse",
+  "description": "Report civic issues from anywhere, even offline.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d0f14",
+  "theme_color": "#6c63ff",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["utilities", "government"],
+  "shortcuts": [
+    {
+      "name": "New Report",
+      "short_name": "Report",
+      "url": "/?action=report",
+      "description": "Quickly file a new civic report"
+    }
+  ]
+}

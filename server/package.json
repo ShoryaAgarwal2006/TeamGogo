@@ -1,0 +1,21 @@
+{
+    "name": "civicpulse-server",
+    "version": "1.0.0",
+    "description": "CivicPulse Phase 2 — PostGIS Spatial Backend",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "dev": "node --watch index.js",
+        "db:init": "psql -d civicpulse -f db/schema.sql && psql -d civicpulse -f db/seed.sql"
+    },
+    "dependencies": {
+        "cors": "^2.8.5",
+        "dotenv": "^16.4.0",
+        "express": "^4.21.0",
+        "multer": "^1.4.5-lts.1",
+        "node-cron": "^4.2.1",
+        "nodemailer": "^8.0.1",
+        "pg": "^8.13.0",
+        "web-push": "^3.6.7"
+    }
+}
