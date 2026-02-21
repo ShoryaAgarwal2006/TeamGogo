@@ -10,7 +10,7 @@
  *  • SW message handler (sync-complete notification)
  */
 
-import { saveReport, getPendingReports, deleteReport, countPendingReports } from './idb-store.js';
+import { saveReport, getPendingReports, deleteReport, countPendingReports, clearAllReports } from './idb-store.js';
 
 /* ════════════════════════════════════════════
    DOM References
@@ -25,6 +25,8 @@ const categoryField = document.getElementById('category');
 const descField = document.getElementById('description');
 const charCount = document.getElementById('char-count');
 const locationField = document.getElementById('location');
+const locationDetailField = document.getElementById('location-detail');
+const locDetailCount = document.getElementById('loc-detail-count');
 const gpsBtn = document.getElementById('gps-btn');
 const gpsStatus = document.getElementById('gps-status');
 
@@ -52,6 +54,14 @@ const submitLabel = document.getElementById('submit-label');
 const queueCard = document.getElementById('queue-card');
 const queueCountBadge = document.getElementById('queue-count-badge');
 const queueList = document.getElementById('queue-list');
+const clearQueueBtn = document.getElementById('clear-queue-btn');
+
+clearQueueBtn.addEventListener('click', async () => {
+    if (!confirm('Discard all queued reports? This cannot be undone.')) return;
+    await clearAllReports();
+    showToast('🗑️ Offline queue cleared');
+    refreshQueueDisplay();
+});
 
 // Phase 2 — Spatial Response Card
 const responseCard = document.getElementById('response-card');
@@ -80,6 +90,14 @@ const notifBtnLabel = document.getElementById('notif-btn-label');
 let compressedBlob = null;   // Result from Web Worker
 let digitalSignature = {};     // { gpsLat, gpsLon, captureTimestamp }
 let imageWorker = null;   // Current Web Worker instance
+let gpsAcquired = false;      // Phase 5: GPS is mandatory
+
+// Phase 5: Reporter token for "my reports" tracking
+let reporterToken = localStorage.getItem('civicpulse-reporter-token');
+if (!reporterToken) {
+    reporterToken = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem('civicpulse-reporter-token', reporterToken);
+}
 
 /* ════════════════════════════════════════════
    1. Service Worker Registration
@@ -113,6 +131,8 @@ function onSWMessage(evt) {
         console.log(`[App] SW synced ${synced}/${total} report(s)`);
         showToast(`✅ ${synced} report${synced !== 1 ? 's' : ''} synced successfully!`);
         refreshQueueDisplay();
+        // Also flush any remaining queued reports immediately
+        flushOfflineQueue();
     }
 }
 
@@ -123,17 +143,14 @@ function updateOnlineStatus() {
     const isOnline = navigator.onLine;
     offlineBanner.hidden = isOnline;
     onlineDot.classList.toggle('offline', !isOnline);
-
-    if (isOnline) {
-        submitLabel.textContent = 'Submit Report';
-    } else {
-        submitLabel.textContent = 'Save for Later (Offline)';
-    }
+    submitLabel.textContent = 'Submit Report';
 }
 
 window.addEventListener('online', () => {
     updateOnlineStatus();
-    // When back online, attempt a manual sync if BG Sync isn't supported
+    // When back online, flush queued reports immediately
+    flushOfflineQueue();
+    // Also attempt a manual sync if BG Sync isn't supported
     tryManualSync();
 });
 window.addEventListener('offline', updateOnlineStatus);
@@ -158,33 +175,138 @@ descField.addEventListener('input', () => {
     charCount.textContent = descField.value.length;
 });
 
+locationDetailField.addEventListener('input', () => {
+    locDetailCount.textContent = locationDetailField.value.length;
+});
+
 /* ════════════════════════════════════════════
    4. GPS Button
    ════════════════════════════════════════════ */
-gpsBtn.addEventListener('click', () => {
-    if (!navigator.geolocation) {
-        showGpsStatus('Geolocation not supported by your browser.', 'error');
-        return;
+
+/** Reverse-geocode lat/lon → human readable address via Nominatim */
+async function reverseGeocode(lat, lon) {
+    try {
+        const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
+            { headers: { 'Accept-Language': 'en' } }
+        );
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data.display_name || null;
+    } catch {
+        return null;
     }
+}
+
+/** Set location from coordinates — also fills the text field with address */
+async function applyLocation(lat, lon, source = 'GPS') {
+    digitalSignature.gpsLat = lat;
+    digitalSignature.gpsLon = lon;
+    digitalSignature.captureTimestamp = new Date().toISOString();
+    gpsAcquired = true;
+
+    // Fill coords immediately, then upgrade to address
+    locationField.value = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+    showGpsStatus(`✅ ${source} location acquired — fetching address…`);
+
+    const address = await reverseGeocode(lat, lon);
+    if (address) locationField.value = address;
+
+    showGpsStatus(`✅ Location ready (${source}): ${lat.toFixed(4)}°, ${lon.toFixed(4)}°`);
+    gpsBtn.disabled = false;
+    gpsBtn.querySelector('span:last-child').textContent = '✅ GPS';
+    gpsBtn.style.borderColor = 'var(--clr-accent)';
+    checkFormValidity();
+}
+
+/** Fallback: get location via IP geolocation (works even if GPS is denied) */
+async function acquireViaIP(silent) {
+    if (!silent) showGpsStatus('📡 Trying IP-based location…');
+
+    // Try multiple free IP geolocation APIs in order
+    const providers = [
+        async () => {
+            const r = await fetch('https://ipwho.is/');
+            const d = await r.json();
+            if (!d.success || !d.latitude) throw new Error('ipwho.is failed');
+            return { lat: d.latitude, lon: d.longitude };
+        },
+        async () => {
+            const r = await fetch('https://ip-api.com/json/?fields=lat,lon,status');
+            const d = await r.json();
+            if (d.status !== 'success' || !d.lat) throw new Error('ip-api.com failed');
+            return { lat: d.lat, lon: d.lon };
+        },
+        async () => {
+            const r = await fetch('https://ipapi.co/json/');
+            const d = await r.json();
+            if (!d.latitude || !d.longitude) throw new Error('ipapi.co failed');
+            return { lat: d.latitude, lon: d.longitude };
+        },
+    ];
+
+    for (const provider of providers) {
+        try {
+            const { lat, lon } = await provider();
+            await applyLocation(lat, lon, 'IP');
+            return;
+        } catch { /* try next */ }
+    }
+
+    // All providers failed
+    showGpsStatus('⚠️ Could not get location. Please type it manually.', 'error');
+    gpsBtn.disabled = false;
+    gpsBtn.querySelector('span:last-child').textContent = 'GPS';
+    checkFormValidity();
+}
+
+function acquireGPS(silent = false) {
     gpsBtn.disabled = true;
     gpsBtn.querySelector('span:last-child').textContent = 'Locating…';
+    if (!silent) showGpsStatus('📡 Acquiring location…');
 
+    if (!navigator.geolocation) {
+        acquireViaIP(silent);
+        return;
+    }
+
+    function onBrowserSuccess(pos) {
+        applyLocation(pos.coords.latitude, pos.coords.longitude, 'GPS');
+    }
+
+    function onNetworkSuccess(pos) {
+        applyLocation(pos.coords.latitude, pos.coords.longitude, 'Network');
+    }
+
+    // Attempt 1: High-accuracy GPS
     navigator.geolocation.getCurrentPosition(
-        (pos) => {
-            const { latitude: lat, longitude: lon } = pos.coords;
-            locationField.value = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
-            showGpsStatus(`📍 GPS acquired: ${lat.toFixed(4)}°, ${lon.toFixed(4)}°`);
-            gpsBtn.disabled = false;
-            gpsBtn.querySelector('span:last-child').textContent = 'GPS';
-        },
+        onBrowserSuccess,
         (err) => {
-            showGpsStatus(`GPS error: ${err.message}`, 'error');
-            gpsBtn.disabled = false;
-            gpsBtn.querySelector('span:last-child').textContent = 'GPS';
+            // Attempt 2: Network-based (Wi-Fi / cell)
+            if (err.code === 3 || err.code === 2) {
+                if (!silent) showGpsStatus('📡 Trying network location…');
+                navigator.geolocation.getCurrentPosition(
+                    onNetworkSuccess,
+                    () => acquireViaIP(silent),   // Attempt 3: IP fallback
+                    { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+                );
+            } else if (err.code === 1) {
+                // Permission denied → go straight to IP
+                if (!silent) showGpsStatus('📍 GPS denied — trying IP location…');
+                acquireViaIP(silent);
+            } else {
+                acquireViaIP(silent);
+            }
         },
-        { enableHighAccuracy: true, timeout: 8000 }
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
     );
-});
+}
+
+
+gpsBtn.addEventListener('click', () => acquireGPS(false));
+
+// Auto-acquire location on page load (tries GPS → network → IP fallback)
+acquireGPS(true);
 
 function showGpsStatus(msg, type = 'ok') {
     gpsStatus.textContent = msg;
@@ -340,10 +462,21 @@ function showDigitalSignature({ gpsLat, gpsLon, captureTimestamp }) {
 function checkFormValidity() {
     const hasCategory = categoryField.value !== '';
     const hasDescription = descField.value.trim().length > 0;
-    const hasLocation = locationField.value.trim().length > 0;
     const hasPhoto = compressedBlob !== null;
+    // GPS is mandatory — either from button or EXIF
+    const hasGPS = gpsAcquired ||
+        (digitalSignature.gpsLat != null && digitalSignature.gpsLon != null);
 
-    submitBtn.disabled = !(hasCategory && hasDescription && hasLocation && hasPhoto);
+    submitBtn.disabled = !(hasCategory && hasDescription && hasPhoto && hasGPS);
+
+    // Show hint if GPS missing
+    if (!hasGPS && (hasCategory || hasDescription)) {
+        gpsStatus.hidden = false;
+        if (!gpsStatus.textContent.startsWith('✅')) {
+            gpsStatus.textContent = '📍 GPS required — click the GPS button above';
+            gpsStatus.style.color = 'var(--clr-warn)';
+        }
+    }
 }
 
 [categoryField, descField, locationField].forEach((el) =>
@@ -360,21 +493,23 @@ reportForm.addEventListener('submit', async (evt) => {
         category: categoryField.value,
         description: descField.value.trim(),
         location: locationField.value.trim(),
+        location_detail: locationDetailField.value.trim() || null,
+        // GPS from button click OR from EXIF
         gpsLat: digitalSignature.gpsLat ?? null,
         gpsLon: digitalSignature.gpsLon ?? null,
-        captureTimestamp: digitalSignature.captureTimestamp ?? null,
+        captureTimestamp: digitalSignature.captureTimestamp ?? new Date().toISOString(),
+        severity_level: document.getElementById('severity-select')?.value || 'medium',
+        reporter_token: reporterToken,
         submittedAt: new Date().toISOString(),
     };
 
     submitBtn.disabled = true;
-    submitLabel.textContent = navigator.onLine ? 'Submitting…' : 'Saving…';
+    submitLabel.textContent = 'Submitting…';
 
-    if (navigator.onLine) {
-        await submitOnline(reportData);
-    } else {
-        await submitOffline(reportData);
-    }
-});
+    // Always try online first — navigator.onLine is unreliable for localhost
+    // Only fall back to offline queue if the network request actually fails
+    await submitOnline(reportData);
+}, false);
 
 async function submitOnline(reportData) {
     try {
@@ -385,23 +520,77 @@ async function submitOnline(reportData) {
             const data = await response.json();
             showToast(data.isDuplicate
                 ? `🤝 Merged! ${data.supporterCount} neighbors support this report`
-                : '📤 Report submitted successfully!');
+                : `✅ Report #${data.reportId} submitted!`);
             showResponseCard(data);
-            // Auto-subscribe for push notifications if this is a fresh report
-            // (so the user gets notified if a duplicate is filed later)
+
+            // Phase 5: Store in sessionStorage so dashboard "My Reports" can show it
+            storeMyReport(data, reportData);
+
             if (!data.isDuplicate) {
                 subscribeToPush(data.reportId).catch(() => { });
             }
             resetFormAfterSubmit();
+
+            // Show a "View on Dashboard" link
+            const viewLink = document.getElementById('view-dashboard-link');
+            if (viewLink) {
+                viewLink.href = `/dashboard.html`;
+                viewLink.hidden = false;
+            }
         } else {
-            // Fallback to offline queue if server error
-            console.warn('[App] Server error, queuing report:', response.status);
-            await submitOffline(reportData);
+            // Show the actual server error — do NOT silently queue
+            let errMsg = `Server error ${response.status}`;
+            try {
+                const errData = await response.json();
+                errMsg = errData.error || errMsg;
+            } catch { }
+            showToast(`❌ ${errMsg}`, 5000);
+            submitBtn.disabled = false;
+            submitLabel.textContent = 'Submit Report';
         }
     } catch (err) {
-        console.warn('[App] Network error, queuing report:', err.message);
+        // True network error — retry once after 1s before queuing
+        console.warn('[App] Network error, retrying once…', err.message);
+        try {
+            await new Promise(r => setTimeout(r, 1000));
+            const formData = buildFormDataFromReport(reportData, compressedBlob);
+            const retryRes = await fetch('/api/reports', { method: 'POST', body: formData });
+            if (retryRes.ok) {
+                const data = await retryRes.json();
+                showToast(data.isDuplicate
+                    ? `🤝 Merged! ${data.supporterCount} neighbors support this report`
+                    : `✅ Report #${data.reportId} submitted!`);
+                showResponseCard(data);
+                storeMyReport(data, reportData);
+                resetFormAfterSubmit();
+                return;
+            }
+        } catch { }
+        // Both attempts failed — fall back to offline queue
+        console.warn('[App] Retry failed, queuing report offline');
         await submitOffline(reportData);
     }
+}
+
+function storeMyReport(data, reportData) {
+    try {
+        const myReports = JSON.parse(localStorage.getItem('civicpulse-my-reports') || '[]');
+        myReports.unshift({
+            reportId: data.reportId,
+            category: reportData.category,
+            description: reportData.description,
+            location: reportData.location,
+            gpsLat: reportData.gpsLat,
+            gpsLon: reportData.gpsLon,
+            severity_level: reportData.severity_level,
+            isDuplicate: data.isDuplicate,
+            ward: data.ward,
+            submittedAt: new Date().toISOString(),
+        });
+        // Keep last 50
+        if (myReports.length > 50) myReports.pop();
+        localStorage.setItem('civicpulse-my-reports', JSON.stringify(myReports));
+    } catch { }
 }
 
 async function submitOffline(reportData) {
@@ -615,6 +804,50 @@ async function refreshQueueDisplay() {
 }
 
 /* ════════════════════════════════════════════
+   9b. Flush Offline Queue (immediate upload)
+   ════════════════════════════════════════════ */
+async function flushOfflineQueue() {
+    if (!navigator.onLine) return;
+    const reports = await getPendingReports();
+    if (!reports.length) return;
+
+    console.log(`[App] Flushing ${reports.length} queued report(s)…`);
+    let flushed = 0;
+
+    for (const report of reports) {
+        try {
+            const fd = new FormData();
+            ['category', 'description', 'location', 'location_detail', 'gpsLat', 'gpsLon',
+                'captureTimestamp', 'severity_level', 'reporter_token'].forEach(k => {
+                    if (report[k] != null) fd.append(k, report[k]);
+                });
+            if (report.imageBase64) {
+                const byteStr = atob(report.imageBase64);
+                const bytes = new Uint8Array(byteStr.length);
+                for (let i = 0; i < byteStr.length; i++) bytes[i] = byteStr.charCodeAt(i);
+                fd.append('photo', new Blob([bytes], { type: 'image/jpeg' }), 'report.jpg');
+            }
+
+            const res = await fetch('/api/reports', { method: 'POST', body: fd });
+            if (res.ok) {
+                const data = await res.json();
+                await deleteReport(report.id);
+                flushed++;
+                storeMyReport(data, report);
+                console.log(`[App] Flushed queued report id=${report.id} → server #${data.reportId}`);
+            }
+        } catch (err) {
+            console.warn(`[App] Could not flush report id=${report.id}:`, err.message);
+        }
+    }
+
+    if (flushed > 0) {
+        showToast(`✅ ${flushed} queued report${flushed !== 1 ? 's' : ''} uploaded!`);
+    }
+    refreshQueueDisplay();
+}
+
+/* ════════════════════════════════════════════
    10. Toast
    ════════════════════════════════════════════ */
 let toastTimer = null;
@@ -659,6 +892,9 @@ function escapeHtml(str) {
     updateOnlineStatus();
     await registerServiceWorker();
     await refreshQueueDisplay();
+
+    // Immediately flush any queued reports if we're online
+    await flushOfflineQueue();
 
     // Restore notification button state from previous session
     const savedPush = localStorage.getItem('civicpulse-push');

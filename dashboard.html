@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#6c63ff" />
     <meta name="description"
-        content="CivicPulse Accountability Dashboard — Real-time SLA monitoring, state machine transitions, and escalation tracking for municipal officers." />
+        content="CivicPulse Accountability Dashboard — Real-time SLA monitoring, live tracking, ward performance, and emergency alerts." />
     <title>CivicPulse — Accountability Dashboard</title>
     <link rel="manifest" href="manifest.json" />
     <link rel="stylesheet" href="index.css" />
@@ -15,6 +15,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
         rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="dashboard.css" />
 </head>
 
@@ -44,14 +45,28 @@
             </div>
             <nav class="header-nav">
                 <a href="/" class="nav-link">📋 Report Issue</a>
+                <a href="/tracking.html" class="nav-link">🗺️ Live Tracking</a>
                 <a href="/analytics.html" class="nav-link">🔍 Transparency</a>
-                <span class="badge badge-phase3">Phase 3</span>
+                <span class="badge badge-phase3">Live</span>
+                <span id="sse-dot" class="sse-dot" title="Live feed disconnected">⬤</span>
                 <span id="online-dot" class="online-dot"></span>
             </nav>
         </div>
     </header>
 
-    <!-- Hero / Summary Bar -->
+    <!-- Emergency Alert Banner -->
+    <div id="emergency-banner" class="emergency-banner" hidden>
+        <div class="emergency-inner">
+            <span class="emergency-icon">🚨</span>
+            <div class="emergency-content">
+                <strong>EMERGENCY ALERTS</strong>
+                <div id="emergency-list" class="emergency-ticker"></div>
+            </div>
+            <button id="emergency-dismiss" class="emergency-dismiss" aria-label="Dismiss">✕</button>
+        </div>
+    </div>
+
+    <!-- Summary Stats -->
     <section class="dash-hero">
         <div class="dash-hero-bg"></div>
         <div class="dash-summary">
@@ -59,29 +74,58 @@
                 <span class="stat-num" id="s-total">—</span>
                 <span class="stat-lbl">Total Active</span>
             </div>
-            <div class="summary-card stat-ok" id="stat-track">
+            <div class="summary-card stat-ok">
                 <span class="stat-num" id="s-track">—</span>
                 <span class="stat-lbl">✅ On Track</span>
             </div>
-            <div class="summary-card stat-warn" id="stat-warn">
+            <div class="summary-card stat-warn">
                 <span class="stat-num" id="s-warn">—</span>
                 <span class="stat-lbl">⚠️ Warning (72h)</span>
             </div>
-            <div class="summary-card stat-urgent" id="stat-urgent">
+            <div class="summary-card stat-urgent">
                 <span class="stat-num" id="s-urgent">—</span>
                 <span class="stat-lbl">🔴 Urgent (120h)</span>
             </div>
-            <div class="summary-card stat-critical" id="stat-crit">
+            <div class="summary-card stat-critical">
                 <span class="stat-num" id="s-crit">—</span>
                 <span class="stat-lbl">🚨 Critical (168h)</span>
             </div>
+            <div class="summary-card stat-emergency">
+                <span class="stat-num" id="s-emerg">—</span>
+                <span class="stat-lbl">⚡ Emergency</span>
+            </div>
         </div>
+    </section>
+
+    <!-- My Reports Section -->
+    <section class="my-reports-section" id="my-reports-section">
+        <div class="my-reports-header">
+            <h2>📋 My Reports</h2>
+            <span class="my-reports-count" id="my-reports-count"></span>
+        </div>
+        <div id="my-reports-grid" class="my-reports-grid">
+            <div class="dash-loading" id="my-reports-loading">
+                <div class="loading-spinner"></div>
+                <p>Loading your reports…</p>
+            </div>
+        </div>
+        <p id="my-reports-empty" class="dash-empty" hidden>You haven't submitted any reports yet. <a href="/">Report an
+                issue →</a></p>
+    </section>
+
+    <!-- Live Map Panel -->
+    <section class="map-panel">
+        <div class="map-panel-header">
+            <h2>🗺️ Live Issue Map</h2>
+            <span class="map-subtitle">All active reports — click a pin for details</span>
+        </div>
+        <div id="dash-map" class="dash-map"></div>
     </section>
 
     <!-- Controls -->
     <div class="dash-controls">
         <div class="filter-group">
-            <label class="filter-lbl">State Filter</label>
+            <label class="filter-lbl">Filter by State</label>
             <div class="filter-pills">
                 <button class="fpill active" data-filter="all" id="f-all">All</button>
                 <button class="fpill" data-filter="SUBMITTED" id="f-sub">Submitted</button>
@@ -91,10 +135,32 @@
                 <button class="fpill" data-filter="RESOLVED" id="f-res">Resolved</button>
             </div>
         </div>
+        <div class="filter-group">
+            <label class="filter-lbl">Severity</label>
+            <div class="filter-pills">
+                <button class="fpill-sev active" data-sev="all">All</button>
+                <button class="fpill-sev" data-sev="critical">🔥 Critical</button>
+                <button class="fpill-sev" data-sev="high">🔴 High</button>
+                <button class="fpill-sev" data-sev="medium">🟡 Medium</button>
+                <button class="fpill-sev" data-sev="low">🟢 Low</button>
+            </div>
+        </div>
         <div class="refresh-group">
             <span id="last-updated" class="last-updated">—</span>
             <button id="refresh-btn" class="btn-refresh" title="Refresh dashboard">🔄 Refresh</button>
         </div>
+    </div>
+
+    <!-- Nearby Complaints -->
+    <div class="nearby-section" id="nearby-section" hidden>
+        <div class="nearby-header">
+            <h3>📍 Complaints Near You</h3>
+            <div class="nearby-controls">
+                <label>Radius: <span id="radius-val">500</span>m</label>
+                <input type="range" id="radius-slider" min="100" max="3000" step="100" value="500" />
+            </div>
+        </div>
+        <div id="nearby-list" class="nearby-list"></div>
     </div>
 
     <!-- Dashboard Grid -->
@@ -108,42 +174,87 @@
         <p id="dash-empty" class="dash-empty" hidden>No reports found matching this filter.</p>
     </main>
 
-    <!-- Officer Transition Modal -->
-    <div id="transition-modal" class="modal-overlay" hidden>
-        <div class="modal-card glass-card">
+    <!-- Ward Performance Table -->
+    <section class="ward-perf-section">
+        <div class="ward-perf-header">
+            <h2>📊 Ward Performance</h2>
+            <span class="ward-perf-subtitle">Resolution time, escalation rate, and on-time %</span>
+        </div>
+        <div id="ward-table-wrap" class="ward-table-wrap">
+            <div class="dash-loading">
+                <div class="loading-spinner"></div>
+                <p>Loading ward data…</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Issue Detail Modal (with Chat + Timeline tabs) -->
+    <div id="issue-modal" class="modal-overlay" hidden>
+        <div class="modal-card glass-card modal-wide">
             <div class="modal-header">
-                <span class="modal-icon" id="modal-icon">🔧</span>
-                <div>
-                    <span class="modal-title" id="modal-title">Transition Report</span>
-                    <span class="modal-sub" id="modal-sub">Applying state change…</span>
+                <span class="modal-icon" id="modal-icon">📋</span>
+                <div class="modal-title-block">
+                    <span class="modal-title" id="modal-title">Issue Details</span>
+                    <span class="modal-sub" id="modal-sub">—</span>
                 </div>
                 <button class="modal-close" id="modal-close" aria-label="Close">✕</button>
             </div>
 
-            <div id="modal-geo-warning" class="geo-warning" hidden>
-                <span>📍</span>
-                <span>Acquiring your GPS location — this is required to confirm you are on-site (within 100m).</span>
+            <!-- Tabs -->
+            <div class="modal-tabs">
+                <button class="modal-tab active" data-tab="transition">🔧 Action</button>
+                <button class="modal-tab" data-tab="timeline">📅 Timeline</button>
+                <button class="modal-tab" data-tab="chat">💬 Chat</button>
             </div>
 
-            <div id="modal-geo-error" class="geo-error" hidden>
-                <span>⚠️</span>
-                <span id="modal-geo-error-msg">GPS unavailable.</span>
+            <!-- Tab: Transition -->
+            <div class="modal-tab-content active" id="tab-transition">
+                <div id="modal-geo-warning" class="geo-warning" hidden>
+                    <span>📍</span>
+                    <span>Acquiring your GPS — required to confirm you are on-site (within 100m).</span>
+                </div>
+                <div id="modal-geo-error" class="geo-error" hidden>
+                    <span>⚠️</span>
+                    <span id="modal-geo-error-msg">GPS unavailable.</span>
+                </div>
+                <div class="modal-actions">
+                    <button id="modal-confirm" class="btn btn-primary" disabled>
+                        <span id="modal-confirm-icon">✅</span>
+                        <span id="modal-confirm-label">Confirm Transition</span>
+                    </button>
+                    <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+                </div>
             </div>
 
-            <div class="modal-actions">
-                <button id="modal-confirm" class="btn btn-primary" disabled>
-                    <span id="modal-confirm-icon">✅</span>
-                    <span id="modal-confirm-label">Confirm Transition</span>
-                </button>
-                <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+            <!-- Tab: Timeline -->
+            <div class="modal-tab-content" id="tab-timeline" hidden>
+                <div id="timeline-list" class="timeline-list">
+                    <div class="loading-spinner"></div>
+                </div>
+            </div>
+
+            <!-- Tab: Chat -->
+            <div class="modal-tab-content" id="tab-chat" hidden>
+                <div id="chat-messages" class="chat-messages"></div>
+                <div class="chat-input-row">
+                    <select id="chat-role" class="chat-role-sel">
+                        <option value="citizen">👤 Citizen</option>
+                        <option value="authority">🏛️ Authority</option>
+                    </select>
+                    <input type="text" id="chat-name" placeholder="Your name" class="chat-name-input" maxlength="50" />
+                    <input type="text" id="chat-input" placeholder="Type a message…" class="chat-input"
+                        maxlength="500" />
+                    <button id="chat-send" class="btn btn-primary btn-sm">Send</button>
+                </div>
             </div>
         </div>
     </div>
 
     <footer class="app-footer">
-        <p>CivicPulse Phase 3 · Accountability Engine · State Machine + SLA Escalation + Geo-fence Enforcement</p>
+        <p>CivicPulse Phase 5 · Live GPS Tracking · Auto-Escalation · Citizen Verification · Chat</p>
     </footer>
 
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script type="module" src="dashboard.js"></script>
 </body>
 

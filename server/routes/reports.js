@@ -1,9 +1,12 @@
 /**
- * routes/reports.js — Spatial API Routes
+ * routes/reports.js — Spatial API Routes (Phase 5 Update)
  *
- * POST /api/reports  — Submit report → Point-in-Polygon → Dedup → Insert
- * GET  /api/reports  — List recent reports
- * GET  /api/wards    — Return ward boundaries as GeoJSON
+ * POST /api/reports       — Submit report (GPS mandatory) → Point-in-Polygon → Dedup → Insert
+ * GET  /api/reports       — List recent reports
+ * GET  /api/reports/nearby — Nearby reports by GPS radius
+ * GET  /api/wards         — Ward boundaries as GeoJSON
+ * GET  /api/emergency-alerts — High-priority / emergency reports
+ * PATCH /api/reports/:id/status — Officer status update
  */
 
 const express = require('express');
@@ -14,7 +17,7 @@ const { sendSupportNotification } = require('./push');
 
 const router = express.Router();
 
-// ── Multer config for photo uploads ─────────────────────────
+// ── Multer config ────────────────────────────────────────────
 const storage = multer.diskStorage({
     destination: process.env.UPLOAD_DIR || path.join(__dirname, '..', 'uploads'),
     filename: (req, file, cb) => {
@@ -25,7 +28,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
     storage,
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB max (images are pre-compressed by the Web Worker)
+    limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         if (file.mimetype.startsWith('image/')) cb(null, true);
         else cb(new Error('Only image files are allowed'));
@@ -33,156 +36,143 @@ const upload = multer({
 });
 
 /* ═══════════════════════════════════════════════════════════
-   POST /api/reports — The Spatial Pipeline
+   POST /api/reports — Spatial Pipeline (GPS Mandatory)
    ═══════════════════════════════════════════════════════════ */
 router.post('/reports', upload.single('photo'), async (req, res) => {
     const client = await pool.connect();
-
     try {
-        const { category, description, location, gpsLat, gpsLon, captureTimestamp } = req.body;
+        const {
+            category, description, location,
+            location_detail,
+            gpsLat, gpsLon, captureTimestamp,
+            severity_level = 'medium', reporter_token,
+        } = req.body;
+
         const lat = parseFloat(gpsLat);
         const lon = parseFloat(gpsLon);
+
+        // Combine GPS address + optional free-text detail into one location string
+        const locationText = location_detail && location_detail.trim()
+            ? `${location || ''} — ${location_detail.trim()}`.trim().replace(/^— /, '')
+            : (location || null);
 
         // Validate required fields
         if (!category || !description) {
             return res.status(400).json({ error: 'category and description are required' });
         }
+        if (isNaN(lat) || isNaN(lon)) {
+            return res.status(400).json({ error: 'GPS coordinates (gpsLat, gpsLon) are required' });
+        }
 
-        const hasCoordinates = !isNaN(lat) && !isNaN(lon);
+        const validSeverity = ['low', 'medium', 'high', 'critical'].includes(severity_level)
+            ? severity_level : 'medium';
         const imageUrl = req.file ? `/uploads/${req.file.filename}` : null;
 
         await client.query('BEGIN');
 
-        // ── Step 1: Point-in-Polygon — Find ward ──────────────────
-        let ward = null;
-        if (hasCoordinates) {
-            const wardQuery = `
-        SELECT ward_id, ward_name, zone, officer_name, officer_email, officer_phone
-        FROM city_wards
-        WHERE ST_Contains(
-          ward_geometry,
-          ST_SetSRID(ST_Point($1, $2), 4326)
-        )
-        LIMIT 1;
-      `;
-            const wardResult = await client.query(wardQuery, [lon, lat]);
-            if (wardResult.rows.length > 0) {
-                ward = wardResult.rows[0];
-            }
-        }
+        // ── Step 1: Point-in-Polygon ──────────────────────────────
+        const wardResult = await client.query(`
+            SELECT ward_id, ward_name, zone, officer_name, officer_email, officer_phone
+            FROM city_wards
+            WHERE ST_Contains(ward_geometry, ST_SetSRID(ST_Point($1, $2), 4326))
+            LIMIT 1
+        `, [lon, lat]);
+        const ward = wardResult.rows[0] || null;
 
         // ── Step 2: Duplicate Detection (50m buffer) ──────────────
-        let existingDuplicate = null;
-        if (hasCoordinates) {
-            const dedupQuery = `
-        SELECT id, description, supporter_count, location_text,
-               ST_Distance(
-                 coordinates::geography,
-                 ST_SetSRID(ST_Point($1, $2), 4326)::geography
-               ) AS distance_m
-        FROM reports
-        WHERE category = $3
-          AND status = 'active'
-          AND parent_report_id IS NULL
-          AND ST_DWithin(
-            coordinates::geography,
-            ST_SetSRID(ST_Point($1, $2), 4326)::geography,
-            50
-          )
-        ORDER BY created_at ASC
-        LIMIT 1;
-      `;
-            const dedupResult = await client.query(dedupQuery, [lon, lat, category]);
-            if (dedupResult.rows.length > 0) {
-                existingDuplicate = dedupResult.rows[0];
-            }
-        }
+        const dedupResult = await client.query(`
+            SELECT id, description, supporter_count, location_text,
+                   ST_Distance(
+                     coordinates::geography,
+                     ST_SetSRID(ST_Point($1, $2), 4326)::geography
+                   ) AS distance_m
+            FROM reports
+            WHERE category = $3
+              AND state NOT IN ('RESOLVED', 'MERGED')
+              AND parent_report_id IS NULL
+              AND ST_DWithin(
+                coordinates::geography,
+                ST_SetSRID(ST_Point($1, $2), 4326)::geography,
+                50
+              )
+            ORDER BY created_at ASC
+            LIMIT 1
+        `, [lon, lat, category]);
+        const existingDuplicate = dedupResult.rows[0] || null;
 
-        let reportId;
-        let isDuplicate = false;
-        let supporterCount = 1;
-        let parentReportId = null;
+        let reportId, isDuplicate = false, supporterCount = 1, parentReportId = null;
 
         if (existingDuplicate) {
-            // ── Step 3a: Merge — Insert as child report ─────────────
+            // ── Step 3a: Merge ────────────────────────────────────
             isDuplicate = true;
             parentReportId = existingDuplicate.id;
 
-            const insertChild = `
-        INSERT INTO reports (
-          category, description, location_text, coordinates,
-          ward_id, image_url, gps_lat, gps_lon, capture_timestamp,
-          parent_report_id, status
-        ) VALUES (
-          $1, $2, $3,
-          ${hasCoordinates ? "ST_SetSRID(ST_Point($4, $5), 4326)" : "NULL"},
-          $6, $7, $8, $9, $10, $11, 'merged'
-        )
-        RETURNING id;
-      `;
-            const childValues = [
-                category,
-                description,
-                location || null,
-                ...(hasCoordinates ? [lon, lat] : [null, null]),
-                ward?.ward_id || null,
-                imageUrl,
-                hasCoordinates ? lat : null,
-                hasCoordinates ? lon : null,
+            const childResult = await client.query(`
+                INSERT INTO reports (
+                    category, description, location_text, coordinates,
+                    ward_id, image_url, gps_lat, gps_lon, capture_timestamp,
+                    parent_report_id, state, status, severity_level, reporter_token
+                ) VALUES (
+                    $1, $2, $3,
+                    ST_SetSRID(ST_Point($4, $5), 4326),
+                    $6, $7, $8, $9, $10, $11, 'MERGED', 'merged', $12, $13
+                )
+                RETURNING id
+            `, [
+                category, description, locationText,
+                lon, lat,
+                ward?.ward_id || null, imageUrl,
+                lat, lon,
                 captureTimestamp || null,
                 parentReportId,
-            ];
-            const childResult = await client.query(insertChild, childValues);
+                validSeverity, reporter_token || null,
+            ]);
             reportId = childResult.rows[0].id;
 
-            // Bump supporter_count on parent
-            const bumpQuery = `
-        UPDATE reports
-        SET supporter_count = supporter_count + 1
-        WHERE id = $1
-        RETURNING supporter_count;
-      `;
-            const bumpResult = await client.query(bumpQuery, [parentReportId]);
+            const bumpResult = await client.query(`
+                UPDATE reports SET supporter_count = supporter_count + 1 WHERE id = $1
+                RETURNING supporter_count
+            `, [parentReportId]);
             supporterCount = bumpResult.rows[0].supporter_count;
 
         } else {
-            // ── Step 3b: New report — Insert as standalone ──────────
-            const insertNew = `
-        INSERT INTO reports (
-          category, description, location_text, coordinates,
-          ward_id, image_url, gps_lat, gps_lon, capture_timestamp
-        ) VALUES (
-          $1, $2, $3,
-          ${hasCoordinates ? "ST_SetSRID(ST_Point($4, $5), 4326)" : "NULL"},
-          $6, $7, $8, $9, $10
-        )
-        RETURNING id;
-      `;
-            const newValues = [
-                category,
-                description,
-                location || null,
-                ...(hasCoordinates ? [lon, lat] : [null, null]),
-                ward?.ward_id || null,
-                imageUrl,
-                hasCoordinates ? lat : null,
-                hasCoordinates ? lon : null,
+            // ── Step 3b: New report ───────────────────────────────
+            const newResult = await client.query(`
+                INSERT INTO reports (
+                    category, description, location_text, coordinates,
+                    ward_id, image_url, gps_lat, gps_lon, capture_timestamp,
+                    severity_level, reporter_token
+                ) VALUES (
+                    $1, $2, $3,
+                    ST_SetSRID(ST_Point($4, $5), 4326),
+                    $6, $7, $8, $9, $10, $11, $12
+                )
+                RETURNING id
+            `, [
+                category, description, locationText,
+                lon, lat,
+                ward?.ward_id || null, imageUrl,
+                lat, lon,
                 captureTimestamp || null,
-            ];
-            const newResult = await client.query(insertNew, newValues);
+                validSeverity, reporter_token || null,
+            ]);
             reportId = newResult.rows[0].id;
         }
 
         await client.query('COMMIT');
 
-        // ── Push Notification (fire-and-forget, after commit) ─────
-        // Notifies the original reporter: "Another neighbor supported your report!"
+        // Push notification (fire-and-forget)
         if (isDuplicate && parentReportId) {
             sendSupportNotification(parentReportId, supporterCount);
         }
 
-        // ── Response ──────────────────────────────────────────────
-        const response = {
+        // Broadcast SSE update
+        if (global.sseClients && global.sseClients.size > 0) {
+            const { broadcastReports } = req.app.get('liveBroadcast') || {};
+            if (broadcastReports) broadcastReports();
+        }
+
+        res.status(201).json({
             success: true,
             reportId,
             isDuplicate,
@@ -200,16 +190,8 @@ router.post('/reports', upload.single('photo'), async (req, res) => {
                 ? `🤝 Another neighbor already reported this! ${supporterCount} people now support this report.`
                 : ward
                     ? `📍 Report routed to ${ward.ward_name} ward — Officer ${ward.officer_name} has been notified.`
-                    : `📋 Report submitted. Could not determine ward from coordinates.`,
-        };
-
-        console.log(
-            `[API] Report #${reportId} | ${category} | ` +
-            `Ward: ${ward?.ward_name || 'Unknown'} | ` +
-            `Duplicate: ${isDuplicate} | Supporters: ${supporterCount}`
-        );
-
-        res.status(201).json(response);
+                    : `📋 Report submitted. Location recorded at ${lat.toFixed(4)}°, ${lon.toFixed(4)}°.`,
+        });
 
     } catch (err) {
         await client.query('ROLLBACK');
@@ -225,25 +207,131 @@ router.post('/reports', upload.single('photo'), async (req, res) => {
    ═══════════════════════════════════════════════════════════ */
 router.get('/reports', async (req, res) => {
     try {
-        const { limit = 50, status = 'active' } = req.query;
+        const { limit = 50, state } = req.query;
+        const stateFilter = state ? `AND r.state = '${state}'` : '';
 
-        const query = `
-      SELECT r.id, r.category, r.description, r.location_text,
-             r.gps_lat, r.gps_lon, r.status, r.supporter_count,
-             r.parent_report_id, r.image_url, r.created_at,
-             w.ward_name, w.officer_name
-      FROM reports r
-      LEFT JOIN city_wards w ON r.ward_id = w.ward_id
-      WHERE ($1 = 'all' OR r.status = $1)
-      ORDER BY r.created_at DESC
-      LIMIT $2;
-    `;
-        const result = await pool.query(query, [status, parseInt(limit)]);
-        res.json({ reports: result.rows, count: result.rows.length });
+        const { rows } = await pool.query(`
+            SELECT r.id, r.category, r.description, r.location_text,
+                   r.gps_lat, r.gps_lon, r.state, r.status, r.supporter_count,
+                   r.severity_level, r.is_emergency, r.verification_count,
+                   r.parent_report_id, r.image_url, r.created_at, r.sla_level,
+                   w.ward_name, w.officer_name
+            FROM reports r
+            LEFT JOIN city_wards w ON r.ward_id = w.ward_id
+            WHERE r.parent_report_id IS NULL
+              ${stateFilter}
+            ORDER BY r.is_emergency DESC, r.created_at DESC
+            LIMIT $1
+        `, [parseInt(limit)]);
 
+        res.json({ reports: rows, count: rows.length });
     } catch (err) {
         console.error('[API] GET /reports error:', err);
         res.status(500).json({ error: 'Failed to fetch reports', detail: err.message });
+    }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   GET /api/reports/my?token=<reporter_token>
+   Returns reports submitted by this reporter
+   ═══════════════════════════════════════════════════════════ */
+router.get('/reports/my', async (req, res) => {
+    const { token } = req.query;
+    if (!token) {
+        return res.status(400).json({ error: 'token query parameter is required' });
+    }
+    try {
+        const { rows } = await pool.query(`
+            SELECT r.id, r.category, r.description, r.location_text,
+                   r.gps_lat, r.gps_lon, r.state, r.status, r.supporter_count,
+                   r.severity_level, r.is_emergency, r.verification_count,
+                   r.parent_report_id, r.image_url, r.created_at, r.updated_at,
+                   r.sla_level,
+                   w.ward_name, w.zone, w.officer_name, w.officer_email
+            FROM reports r
+            LEFT JOIN city_wards w ON r.ward_id = w.ward_id
+            WHERE r.reporter_token = $1
+            ORDER BY r.created_at DESC
+            LIMIT 50
+        `, [token]);
+
+        res.json({ reports: rows, count: rows.length });
+    } catch (err) {
+        console.error('[API] GET /reports/my error:', err);
+        res.status(500).json({ error: 'Failed to fetch your reports', detail: err.message });
+    }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   GET /api/reports/nearby?lat=&lon=&radius=500
+   Returns reports within radius metres, ordered by distance
+   ═══════════════════════════════════════════════════════════ */
+router.get('/reports/nearby', async (req, res) => {
+    const { lat, lon, radius = 500 } = req.query;
+    if (!lat || !lon) {
+        return res.status(400).json({ error: 'lat and lon are required' });
+    }
+    const userLat = parseFloat(lat);
+    const userLon = parseFloat(lon);
+    const radiusM = Math.min(parseInt(radius) || 500, 5000); // cap at 5km
+
+    try {
+        const { rows } = await pool.query(`
+            SELECT
+                r.id, r.category, r.description, r.location_text,
+                r.gps_lat, r.gps_lon, r.state, r.severity_level,
+                r.is_emergency, r.supporter_count, r.verification_count,
+                r.image_url, r.created_at, r.sla_level,
+                w.ward_name, w.officer_name,
+                ST_Distance(
+                    coordinates::geography,
+                    ST_SetSRID(ST_Point($2, $1), 4326)::geography
+                ) AS distance_m
+            FROM reports r
+            LEFT JOIN city_wards w ON r.ward_id = w.ward_id
+            WHERE r.parent_report_id IS NULL
+              AND r.state NOT IN ('MERGED', 'RESOLVED')
+              AND coordinates IS NOT NULL
+              AND ST_DWithin(
+                coordinates::geography,
+                ST_SetSRID(ST_Point($2, $1), 4326)::geography,
+                $3
+              )
+            ORDER BY distance_m ASC
+            LIMIT 30
+        `, [userLat, userLon, radiusM]);
+
+        res.json({ reports: rows, count: rows.length, radius_m: radiusM });
+    } catch (err) {
+        console.error('[API] GET /reports/nearby error:', err);
+        res.status(500).json({ error: 'Failed to fetch nearby reports', detail: err.message });
+    }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   GET /api/emergency-alerts — High-priority emergency reports
+   ═══════════════════════════════════════════════════════════ */
+router.get('/emergency-alerts', async (req, res) => {
+    try {
+        const { rows } = await pool.query(`
+            SELECT r.id, r.category, r.description, r.location_text,
+                   r.gps_lat, r.gps_lon, r.state, r.severity_level,
+                   r.supporter_count, r.verification_count, r.sla_level,
+                   r.is_emergency, r.created_at,
+                   w.ward_name, w.zone, w.officer_name
+            FROM reports r
+            LEFT JOIN city_wards w ON r.ward_id = w.ward_id
+            WHERE r.is_emergency = TRUE
+              AND r.state NOT IN ('RESOLVED', 'MERGED')
+              AND r.parent_report_id IS NULL
+            ORDER BY r.sla_level DESC, r.supporter_count DESC, r.created_at ASC
+            LIMIT 20
+        `);
+
+        res.json({ alerts: rows, count: rows.length });
+    } catch (err) {
+        console.error('[API] GET /emergency-alerts error:', err);
+        res.status(500).json({ error: 'Failed to fetch emergency alerts', detail: err.message });
     }
 });
 
@@ -252,17 +340,15 @@ router.get('/reports', async (req, res) => {
    ═══════════════════════════════════════════════════════════ */
 router.get('/wards', async (req, res) => {
     try {
-        const query = `
-      SELECT ward_id, ward_name, zone, officer_name, officer_email,
-             ST_AsGeoJSON(ward_geometry)::json AS geometry
-      FROM city_wards
-      ORDER BY ward_id;
-    `;
-        const result = await pool.query(query);
+        const { rows } = await pool.query(`
+            SELECT ward_id, ward_name, zone, officer_name, officer_email,
+                   ST_AsGeoJSON(ward_geometry)::json AS geometry
+            FROM city_wards ORDER BY ward_id
+        `);
 
-        const geojson = {
+        res.json({
             type: 'FeatureCollection',
-            features: result.rows.map((row) => ({
+            features: rows.map(row => ({
                 type: 'Feature',
                 properties: {
                     wardId: row.ward_id,
@@ -273,55 +359,31 @@ router.get('/wards', async (req, res) => {
                 },
                 geometry: row.geometry,
             })),
-        };
-
-        res.json(geojson);
-
+        });
     } catch (err) {
         console.error('[API] GET /wards error:', err);
         res.status(500).json({ error: 'Failed to fetch wards', detail: err.message });
     }
 });
 
-module.exports = router;
-
 /* ════════════════════════════════════════════════════════
-   PATCH /api/reports/:id/status — Officer status update
-   Body: { status: 'in_progress' | 'resolved' }
+   PATCH /api/reports/:id/status — Quick status update
    ════════════════════════════════════════════════════════ */
 router.patch('/reports/:id/status', async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
-
-    const VALID_STATUSES = ['active', 'in_progress', 'resolved'];
-    if (!status || !VALID_STATUSES.includes(status)) {
-        return res.status(400).json({
-            error: `status must be one of: ${VALID_STATUSES.join(', ')}`,
-        });
+    const VALID = ['active', 'in_progress', 'resolved'];
+    if (!status || !VALID.includes(status)) {
+        return res.status(400).json({ error: `status must be one of: ${VALID.join(', ')}` });
     }
-
     try {
-        const query = `
-      UPDATE reports
-      SET status = $1
-      WHERE id = $2
-      RETURNING id, category, description, status, ward_id, supporter_count, updated_at;
-    `;
-        const result = await pool.query(query, [status, id]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: `Report #${id} not found` });
-        }
-
-        const updated = result.rows[0];
-        console.log(`[API] Report #${id} status updated to '${status}'`);
-
-        res.json({
-            success: true,
-            report: updated,
-            message: `✅ Report #${id} status updated to '${status}'`,
-        });
-
+        const { rows } = await pool.query(
+            `UPDATE reports SET status = $1 WHERE id = $2
+             RETURNING id, category, description, status, ward_id, supporter_count, updated_at`,
+            [status, id]
+        );
+        if (!rows.length) return res.status(404).json({ error: `Report #${id} not found` });
+        res.json({ success: true, report: rows[0], message: `✅ Report #${id} status updated to '${status}'` });
     } catch (err) {
         console.error('[API] PATCH /reports/:id/status error:', err);
         res.status(500).json({ error: 'Failed to update status', detail: err.message });

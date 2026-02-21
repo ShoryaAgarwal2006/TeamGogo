@@ -11,6 +11,9 @@
 let map = null;
 let heatLayer = null;
 let mapInitialized = false;
+let nearbyInitialized = false;
+let nearbyLat = null, nearbyLon = null;
+let nearbyRadius = 500;
 
 /* ── DOM ───────────────────────────────────────────────────── */
 const onlineDot = document.getElementById('online-dot');
@@ -46,6 +49,10 @@ document.querySelectorAll('.tab').forEach(btn => {
         if (btn.dataset.tab === 'heatmap' && !mapInitialized) {
             initMap();
         }
+        // Lazy-init nearby when first opened
+        if (btn.dataset.tab === 'nearby' && !nearbyInitialized) {
+            initNearby();
+        }
     });
 });
 
@@ -58,7 +65,7 @@ async function loadFeed() {
     const empty = document.getElementById('feed-empty');
 
     try {
-        const res = await fetch('/api/analytics/feed?limit=50');
+        const res = await fetchWithTimeout('/api/analytics/feed?limit=50');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const { reports } = await res.json();
 
@@ -224,7 +231,7 @@ async function loadRankings() {
     const loading = document.getElementById('rankings-loading');
 
     try {
-        const res = await fetch('/api/analytics/ward-rankings');
+        const res = await fetchWithTimeout('/api/analytics/ward-rankings');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const { rankings, formula } = await res.json();
 
@@ -456,12 +463,136 @@ function escHtml(str) {
         .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** fetch with a timeout so pages never hang forever */
+async function fetchWithTimeout(url, timeoutMs = 10000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timer);
+        return res;
+    } catch (err) {
+        clearTimeout(timer);
+        if (err.name === 'AbortError') throw new Error('Request timed out');
+        throw err;
+    }
+}
+
+/* ══════════════════════════════════════════════════════════════
+   TAB 4: NEARBY REPORTS
+══════════════════════════════════════════════════════════════ */
+function initNearby() {
+    nearbyInitialized = true;
+    const gpsStatus = document.getElementById('nearby-gps-status');
+    const gpsDenied = document.getElementById('nearby-gps-denied');
+
+    if (!navigator.geolocation) {
+        gpsStatus.hidden = true;
+        gpsDenied.hidden = false;
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+        (pos) => {
+            nearbyLat = pos.coords.latitude;
+            nearbyLon = pos.coords.longitude;
+            gpsStatus.hidden = true;
+            document.getElementById('nearby-controls-bar').hidden = false;
+            loadNearbyReports();
+        },
+        () => {
+            gpsStatus.hidden = true;
+            gpsDenied.hidden = false;
+        },
+        { enableHighAccuracy: true, timeout: 12000 }
+    );
+}
+
+async function loadNearbyReports() {
+    if (nearbyLat == null || nearbyLon == null) return;
+    const grid = document.getElementById('nearby-reports-grid');
+    const empty = document.getElementById('nearby-empty');
+    const countEl = document.getElementById('nearby-report-count');
+
+    grid.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><p>Searching nearby…</p></div>';
+    empty.hidden = true;
+
+    try {
+        const res = await fetch(`/api/reports/nearby?lat=${nearbyLat}&lon=${nearbyLon}&radius=${nearbyRadius}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { reports } = await res.json();
+
+        if (!reports.length) {
+            grid.innerHTML = '';
+            empty.hidden = false;
+            countEl.textContent = '0 reports';
+            return;
+        }
+
+        countEl.textContent = `${reports.length} report${reports.length !== 1 ? 's' : ''} found`;
+        renderNearbyCards(grid, reports);
+    } catch (err) {
+        grid.innerHTML = `<p style="color:var(--clr-warn);padding:1rem">⚠️ ${err.message}</p>`;
+    }
+}
+
+function renderNearbyCards(grid, reports) {
+    const catIcons = { pothole: '🕳️', streetlight: '💡', garbage: '🗑️', flooding: '🌊', sidewalk: '🚶', graffiti: '🎨', other: '📋' };
+    const STATE_META = {
+        SUBMITTED: { label: 'Submitted', emoji: '📋', color: '#64748b' },
+        VERIFIED: { label: 'Verified', emoji: '✅', color: '#22d3ee' },
+        ASSIGNED: { label: 'Assigned', emoji: '👷', color: '#a78bfa' },
+        IN_PROGRESS: { label: 'In Progress', emoji: '🔧', color: '#f59e0b' },
+        RESOLVED: { label: 'Resolved', emoji: '🎉', color: '#10b981' },
+    };
+    const SEV_COLORS = { critical: '#dc2626', high: '#ef4444', medium: '#f59e0b', low: '#10b981' };
+    const SEV_ICONS = { critical: '🔥', high: '🔴', medium: '🟡', low: '🟢' };
+
+    grid.innerHTML = reports.map(r => {
+        const sm = STATE_META[r.state] || STATE_META.SUBMITTED;
+        const sevColor = SEV_COLORS[r.severity_level] || SEV_COLORS.medium;
+        const sevIcon = SEV_ICONS[r.severity_level] || SEV_ICONS.medium;
+        const icon = catIcons[r.category] || '📋';
+        const dist = Math.round(r.distance_m);
+        const hoursAgo = Math.floor((Date.now() - new Date(r.created_at).getTime()) / 3_600_000);
+
+        return `
+<div class="nearby-report-card">
+  <div class="nearby-card-dist">${dist}m away</div>
+  <div class="nearby-card-header">
+    <span class="nearby-card-cat">${icon} ${r.category}</span>
+    <span style="background:${sm.color}25;color:${sm.color};padding:.12rem .4rem;border-radius:999px;font-size:.7rem;font-weight:600">${sm.emoji} ${sm.label}</span>
+  </div>
+  <p class="nearby-card-desc">${escHtml((r.description || '').slice(0, 100))}${(r.description?.length || 0) > 100 ? '…' : ''}</p>
+  <div class="nearby-card-meta">
+    <span style="background:${sevColor}20;color:${sevColor};padding:.1rem .35rem;border-radius:.3rem;font-size:.68rem;font-weight:600;border:1px solid ${sevColor}40">${sevIcon} ${r.severity_level}</span>
+    ${r.ward_name ? `<span class="nearby-meta-chip">🗺️ ${escHtml(r.ward_name)}</span>` : ''}
+    <span class="nearby-meta-chip">👥 ${r.supporter_count || 1}</span>
+    <span class="nearby-meta-chip">⏱️ ${hoursAgo}h ago</span>
+  </div>
+</div>`;
+    }).join('');
+}
+
+// Radius slider
+const nearbySlider = document.getElementById('nearby-radius-slider');
+if (nearbySlider) {
+    nearbySlider.addEventListener('input', () => {
+        nearbyRadius = parseInt(nearbySlider.value);
+        document.getElementById('nearby-radius-val').textContent = nearbyRadius;
+        loadNearbyReports();
+    });
+}
+
 /* ══════════════════════════════════════════════════════════════
    INIT
 ══════════════════════════════════════════════════════════════ */
 (async function init() {
     updateOnlineStatus();
-    await loadFeed();
-    await loadRankings();
+    // Run in parallel — don't let one slow fetch block the other
+    await Promise.all([
+        loadFeed(),
+        loadRankings(),
+    ]);
     console.log('[Analytics] CivicPulse Phase 4 Transparency Dashboard initialized 🏛️');
 })();

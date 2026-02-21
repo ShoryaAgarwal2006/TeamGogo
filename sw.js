@@ -8,16 +8,15 @@
  *  • Broadcasts sync completion to all clients
  */
 
-const CACHE_NAME = 'civicpulse-shell-v1';
+const CACHE_NAME = 'civicpulse-shell-v3';
 const SYNC_TAG = 'sync-reports';
 const API_ENDPOINT = '/api/reports'; // Adapts to real backend
 
-// Assets to pre-cache on install
+// Assets to pre-cache on install (app.js excluded — always fetch fresh)
 const SHELL_ASSETS = [
     '/',
     '/index.html',
     '/index.css',
-    '/app.js',
     '/idb-store.js',
     '/manifest.json',
 ];

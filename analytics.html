@@ -57,6 +57,9 @@
         <button class="tab" id="tab-heatmap" data-tab="heatmap">
             <span class="tab-icon">🌡️</span> Heatmap
         </button>
+        <button class="tab" id="tab-nearby" data-tab="nearby">
+            <span class="tab-icon">📍</span> Nearby Reports
+        </button>
     </div>
 
     <!-- ════════════════════════════════════════════════════════
@@ -84,7 +87,8 @@
         <div class="panel-header">
             <h2 class="panel-title">Ward Accountability Leaderboard</h2>
             <p class="panel-sub">Real-time ranking using:
-                <code>Score = (ResolutionRate × 0.6) + (AvgResponseTimeScore × 0.4)</code></p>
+                <code>Score = (ResolutionRate × 0.6) + (AvgResponseTimeScore × 0.4)</code>
+            </p>
         </div>
         <div id="ranking-table-wrap" class="ranking-wrap">
             <div class="loading-state" id="rankings-loading">
@@ -148,9 +152,36 @@
         </div>
     </section>
 
+    <!-- ════════════════════════════════════════════════════════
+       TAB 4: NEARBY REPORTS
+  ════════════════════════════════════════════════════════ -->
+    <section id="panel-nearby" class="tab-panel" hidden>
+        <div class="panel-header">
+            <h2 class="panel-title">Reports Near You</h2>
+            <p class="panel-sub">See all active civic reports within your vicinity. Allow GPS to see nearby issues
+                reported by your community.</p>
+        </div>
+        <div class="nearby-controls-bar" id="nearby-controls-bar" hidden>
+            <div class="nearby-radius-ctrl">
+                <label>Radius: <span id="nearby-radius-val">500</span>m</label>
+                <input type="range" id="nearby-radius-slider" min="100" max="5000" step="100" value="500" />
+            </div>
+            <span id="nearby-report-count" class="nearby-report-count"></span>
+        </div>
+        <div id="nearby-gps-status" class="nearby-gps-status">
+            <div class="loading-spinner"></div>
+            <p>📡 Acquiring your GPS location…</p>
+        </div>
+        <div id="nearby-reports-grid" class="nearby-reports-grid"></div>
+        <p id="nearby-empty" class="empty-state" hidden>No reports found within this radius. Try increasing the range.
+        </p>
+        <p id="nearby-gps-denied" class="empty-state" hidden>📍 GPS access denied. Please enable location services to
+            see nearby reports.</p>
+    </section>
+
     <footer class="app-footer">
         <p>CivicPulse Phase 4 · Resolution Proof Protocol · Citizen Acceptance Voting · Ward Rankings · Heatmap
-            Analytics</p>
+            Analytics · Nearby Reports</p>
     </footer>
 
     <!-- Leaflet + Heatmap.js -->

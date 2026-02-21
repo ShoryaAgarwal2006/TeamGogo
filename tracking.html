@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#6c63ff" />
+    <title>CivicPulse — Live Issue Tracker</title>
+    <meta name="description"
+        content="Real-time civic issue tracking map — see all reported problems near you, verify issues, and chat with authorities." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="tracking.css" />
+</head>
+
+<body>
+    <!-- Header -->
+    <header class="track-header">
+        <div class="track-header-inner">
+            <a href="/" class="track-logo">
+                <span>🏛️</span>
+                <div>
+                    <span class="track-logo-name">CivicPulse</span>
+                    <span class="track-logo-tag">Live Issue Tracker</span>
+                </div>
+            </a>
+            <div class="track-header-actions">
+                <span id="sse-status" class="sse-status">⬤ Connecting…</span>
+                <a href="/" class="track-nav-btn">📋 Report Issue</a>
+                <a href="/dashboard.html" class="track-nav-btn">📊 Dashboard</a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Emergency Ticker -->
+    <div id="emergency-ticker" class="emergency-ticker-bar" hidden>
+        <span class="ticker-label">🚨 EMERGENCY</span>
+        <div id="ticker-content" class="ticker-content"></div>
+    </div>
+
+    <!-- Main Layout: Map + Sidebar -->
+    <div class="track-layout">
+        <!-- Map -->
+        <div id="track-map" class="track-map"></div>
+
+        <!-- Sidebar -->
+        <aside class="track-sidebar" id="track-sidebar">
+            <!-- Nearby filter -->
+            <div class="sidebar-section sidebar-filters">
+                <div class="sidebar-title">
+                    <span>🗺️ Live Issues</span>
+                    <span id="issue-count" class="count-badge">–</span>
+                </div>
+                <div class="nearby-ctrl">
+                    <label>Radius: <strong id="sb-radius-val">All</strong></label>
+                    <input type="range" id="sb-radius" min="0" max="5000" step="100" value="0" />
+                </div>
+                <div class="sev-filter">
+                    <button class="sfpill active" data-sev="all">All</button>
+                    <button class="sfpill" data-sev="critical">🔥</button>
+                    <button class="sfpill" data-sev="high">🔴</button>
+                    <button class="sfpill" data-sev="medium">🟡</button>
+                    <button class="sfpill" data-sev="low">🟢</button>
+                </div>
+            </div>
+
+            <!-- Issues list -->
+            <div class="sidebar-section sidebar-list-section">
+                <div id="issue-list" class="issue-list">
+                    <div class="loading-row">
+                        <div class="loading-spinner-sm"></div><span>Loading…</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Detail Panel (slide-in) -->
+        <div id="detail-panel" class="detail-panel" hidden>
+            <div class="detail-header">
+                <div class="detail-id-row">
+                    <span id="dp-id" class="dp-id">—</span>
+                    <span id="dp-state" class="dp-state-badge">—</span>
+                    <span id="dp-sev" class="dp-sev-badge">—</span>
+                </div>
+                <button id="dp-close" class="dp-close">✕</button>
+            </div>
+            <div class="dp-category" id="dp-category">—</div>
+            <p class="dp-desc" id="dp-desc">—</p>
+
+            <div class="dp-meta">
+                <div class="dp-meta-row"><span>🗺️ Ward</span><span id="dp-ward">—</span></div>
+                <div class="dp-meta-row"><span>👤 Officer</span><span id="dp-officer">—</span></div>
+                <div class="dp-meta-row"><span>👥 Supporters</span><span id="dp-supporters">—</span></div>
+                <div class="dp-meta-row"><span>✔️ Verified by</span><span id="dp-verified">—</span></div>
+                <div class="dp-meta-row"><span>📅 Submitted</span><span id="dp-created">—</span></div>
+            </div>
+
+            <!-- Verify Button -->
+            <div id="dp-verify-section" class="dp-verify-section">
+                <button id="dp-verify-btn" class="btn-verify">✔️ Verify This Issue</button>
+                <p id="dp-verify-msg" class="dp-verify-msg"></p>
+            </div>
+
+            <!-- Tabs -->
+            <div class="dp-tabs">
+                <button class="dp-tab active" data-tab="dp-tab-timeline">📅 Timeline</button>
+                <button class="dp-tab" data-tab="dp-tab-chat">💬 Chat</button>
+            </div>
+
+            <!-- Timeline tab -->
+            <div id="dp-tab-timeline" class="dp-tab-content active">
+                <div id="dp-timeline" class="dp-timeline">
+                    <div class="loading-row">
+                        <div class="loading-spinner-sm"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat tab -->
+            <div id="dp-tab-chat" class="dp-tab-content" hidden>
+                <div id="dp-chat-msgs" class="dp-chat-msgs"></div>
+                <div class="dp-chat-input-row">
+                    <input type="text" id="dp-chat-name" placeholder="Your name" class="dp-chat-name" maxlength="50" />
+                    <input type="text" id="dp-chat-msg" placeholder="Write a message…" class="dp-chat-msg-input"
+                        maxlength="500" />
+                    <button id="dp-chat-send" class="dp-chat-send">→</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script type="module" src="tracking.js"></script>
+</body>
+
+</html>

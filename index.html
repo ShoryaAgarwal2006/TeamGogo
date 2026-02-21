@@ -118,7 +118,12 @@
             </button>
           </div>
           <p id="gps-status" class="field-hint" hidden></p>
+          <textarea id="location-detail" name="location_detail"
+            placeholder="Add more detail — e.g. near the red gate, opposite bus stop 12, 2nd floor of XYZ building…"
+            rows="2" maxlength="200" style="margin-top:0.5rem;width:100%;resize:vertical;"></textarea>
+          <div class="char-counter"><span id="loc-detail-count">0</span> / 200</div>
         </div>
+
       </div>
 
       <!-- ── Photo Uploader ── -->
@@ -254,9 +259,13 @@
           <span class="queue-sub">Reports waiting for connectivity</span>
         </div>
         <span id="queue-count-badge" class="queue-badge">0</span>
+        <button type="button" id="clear-queue-btn" class="btn btn-secondary"
+          style="margin-left:auto;font-size:.75rem;padding:.35rem .75rem;color:#ef4444;border-color:#ef444440;"
+          title="Discard all queued reports">🗑️ Clear</button>
       </div>
       <ul id="queue-list" class="queue-list"></ul>
     </div>
+
 
   </main>
 

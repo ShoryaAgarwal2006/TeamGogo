@@ -673,6 +673,131 @@
     letter-spacing: 0.04em;
 }
 
+/* ══════════════════════════════════════════════════════════
+   TAB 4: NEARBY REPORTS
+══════════════════════════════════════════════════════════ */
+.nearby-controls-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 var(--space-xl) var(--space-md);
+    width: 100%;
+    box-sizing: border-box;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+}
+
+.nearby-radius-ctrl {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    font-size: 0.85rem;
+    color: var(--clr-text-muted);
+}
+
+.nearby-radius-ctrl input[type=range] {
+    accent-color: var(--clr-primary);
+    width: 180px;
+}
+
+.nearby-report-count {
+    font-size: 0.8rem;
+    color: var(--clr-text-muted);
+    background: var(--clr-glass);
+    padding: 4px 12px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--clr-glass-border);
+}
+
+.nearby-gps-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-2xl);
+    color: var(--clr-text-muted);
+}
+
+.nearby-reports-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--space-md);
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 var(--space-xl) var(--space-2xl);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.nearby-report-card {
+    background: var(--clr-glass);
+    border: 1px solid var(--clr-glass-border);
+    border-radius: var(--radius-xl);
+    backdrop-filter: blur(16px);
+    box-shadow: var(--shadow-card);
+    padding: var(--space-lg);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: transform var(--t-fast), box-shadow var(--t-fast), border-color var(--t-fast);
+    animation: fadeIn var(--t-mid) var(--ease-smooth);
+}
+
+.nearby-report-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+    border-color: rgba(108, 99, 255, 0.35);
+}
+
+.nearby-card-dist {
+    font-family: var(--font-display);
+    font-size: 1.1rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--clr-primary), #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.nearby-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+}
+
+.nearby-card-cat {
+    font-weight: 700;
+    font-size: 0.9rem;
+    text-transform: capitalize;
+    color: var(--clr-text-primary);
+}
+
+.nearby-card-desc {
+    font-size: 0.82rem;
+    color: var(--clr-text-muted);
+    line-height: 1.5;
+    margin: 0;
+}
+
+.nearby-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.nearby-meta-chip {
+    font-size: 0.72rem;
+    color: var(--clr-text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--clr-glass-border);
+}
+
 /* ── Responsive ──────────────────────────────────────────────*/
 @media (max-width: 600px) {
     .tab-bar {
@@ -710,5 +835,14 @@
     .ranking-table td,
     .ranking-table th {
         padding: 10px 8px;
+    }
+
+    .nearby-reports-grid {
+        grid-template-columns: 1fr;
+        padding: 0 var(--space-md) var(--space-xl);
+    }
+
+    .nearby-controls-bar {
+        padding: 0 var(--space-md) var(--space-md);
     }
 }

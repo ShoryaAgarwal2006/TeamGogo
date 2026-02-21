@@ -3,7 +3,7 @@
  * Used by both app.js (main thread) and sw.js (service worker context)
  */
 
-const DB_NAME    = 'civicpulse-db';
+const DB_NAME = 'civicpulse-db';
 const DB_VERSION = 1;
 const STORE_NAME = 'pendingReports';
 
@@ -22,20 +22,20 @@ function openDB() {
       }
     };
 
-    req.onsuccess = ()  => resolve(req.result);
-    req.onerror   = ()  => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
   });
 }
 
 /** Save a pending report to IndexedDB */
 export async function saveReport(reportData) {
-  const db    = await openDB();
-  const tx    = db.transaction(STORE_NAME, 'readwrite');
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
-  const id    = await new Promise((resolve, reject) => {
+  const id = await new Promise((resolve, reject) => {
     const req = store.add({ ...reportData, createdAt: Date.now() });
     req.onsuccess = () => resolve(req.result);
-    req.onerror   = () => reject(req.error);
+    req.onerror = () => reject(req.error);
   });
   await tx.complete;
   db.close();
@@ -44,13 +44,13 @@ export async function saveReport(reportData) {
 
 /** Retrieve all pending reports */
 export async function getPendingReports() {
-  const db    = await openDB();
-  const tx    = db.transaction(STORE_NAME, 'readonly');
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readonly');
   const store = tx.objectStore(STORE_NAME);
   const items = await new Promise((resolve, reject) => {
     const req = store.getAll();
     req.onsuccess = () => resolve(req.result);
-    req.onerror   = () => reject(req.error);
+    req.onerror = () => reject(req.error);
   });
   db.close();
   return items;
@@ -58,27 +58,40 @@ export async function getPendingReports() {
 
 /** Delete a report by its auto-generated id */
 export async function deleteReport(id) {
-  const db    = await openDB();
-  const tx    = db.transaction(STORE_NAME, 'readwrite');
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
   await new Promise((resolve, reject) => {
     const req = store.delete(id);
     req.onsuccess = () => resolve();
-    req.onerror   = () => reject(req.error);
+    req.onerror = () => reject(req.error);
   });
   db.close();
 }
 
 /** Count pending reports */
 export async function countPendingReports() {
-  const db    = await openDB();
-  const tx    = db.transaction(STORE_NAME, 'readonly');
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readonly');
   const store = tx.objectStore(STORE_NAME);
   const count = await new Promise((resolve, reject) => {
     const req = store.count();
     req.onsuccess = () => resolve(req.result);
-    req.onerror   = () => reject(req.error);
+    req.onerror = () => reject(req.error);
   });
   db.close();
   return count;
+}
+
+/** Clear ALL pending reports from the queue */
+export async function clearAllReports() {
+  const db = await openDB();
+  const tx = db.transaction(STORE_NAME, 'readwrite');
+  const store = tx.objectStore(STORE_NAME);
+  await new Promise((resolve, reject) => {
+    const req = store.clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
+  db.close();
 }
