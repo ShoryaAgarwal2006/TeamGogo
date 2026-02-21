@@ -7,6 +7,35 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const pool = require('./db/pool');
+
+/* ── Auto-migration: runs schema + seed on every cold start ── */
+async function runMigrations() {
+    const schemaFile = path.join(__dirname, 'db', 'schema_v5.sql');
+    const seedFile = path.join(__dirname, 'db', 'seed.sql');
+    const client = await pool.connect();
+    try {
+        console.log('[DB] Running schema migration…');
+        const schema = fs.readFileSync(schemaFile, 'utf8');
+        await client.query(schema);
+        console.log('[DB] Schema OK');
+
+        // Only seed if city_wards table is empty
+        const { rows } = await client.query('SELECT COUNT(*) AS n FROM city_wards');
+        if (parseInt(rows[0].n) === 0) {
+            console.log('[DB] Seeding ward data…');
+            const seed = fs.readFileSync(seedFile, 'utf8');
+            await client.query(seed);
+            console.log('[DB] Seed OK');
+        } else {
+            console.log('[DB] Ward data already present — skipping seed');
+        }
+    } catch (err) {
+        console.error('[DB] Migration error:', err.message);
+    } finally {
+        client.release();
+    }
+}
 
 const reportsRouter = require('./routes/reports');
 const pushRouter = require('./routes/push');
@@ -72,12 +101,15 @@ app.use((err, req, res, next) => {
     res.status(500).json({ error: 'Internal server error', detail: err.message });
 });
 
-// Start
-app.listen(PORT, () => {
-    console.log(`\n🏛️  CivicPulse Phase 5 server running at http://localhost:${PORT}`);
-    console.log(`   • PWA:          http://localhost:${PORT}/`);
-    console.log(`   • Dashboard:    http://localhost:${PORT}/dashboard.html`);
-    console.log(`   • Live Tracking:http://localhost:${PORT}/tracking.html`);
-    console.log(`   • API:          http://localhost:${PORT}/api/\n`);
-    startCron();
-});
+// Start — run migrations first, then listen
+(async () => {
+    await runMigrations();
+    app.listen(PORT, () => {
+        console.log(`\n🏛️  CivicPulse Phase 5 server running at http://localhost:${PORT}`);
+        console.log(`   • PWA:          http://localhost:${PORT}/`);
+        console.log(`   • Dashboard:    http://localhost:${PORT}/dashboard.html`);
+        console.log(`   • Live Tracking:http://localhost:${PORT}/tracking.html`);
+        console.log(`   • API:          http://localhost:${PORT}/api/\n`);
+        startCron();
+    });
+})();

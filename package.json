@@ -1,0 +1,13 @@
+{
+    "name": "civicpulse",
+    "version": "1.0.0",
+    "description": "CivicPulse — Civic Issue Reporting PWA",
+    "scripts": {
+        "start": "node server/index.js",
+        "install": "cd server && npm install",
+        "build": "cd server && npm install"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}
