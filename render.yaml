@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: civicpulse
+    runtime: node
+    buildCommand: cd server && npm install
+    startCommand: node server/index.js
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: civicpulse-db
+          property: connectionString
+      - key: VAPID_PUBLIC_KEY
+        value: BASzo6bamn1OwWZlYMkJFW4BciNB9Ahbcvq0RIjHGNfHskurRZnsKMvJqNnWZTCVBbRaewwWwOhTYH7kELmyWyk
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_CONTACT
+        value: mailto:admin@civicpulse.gov.in
+      - key: SMTP_FROM
+        value: noreply@civicpulse.gov.in
+      - key: UPLOAD_DIR
+        value: ./server/uploads
+
+databases:
+  - name: civicpulse-db
+    databaseName: civicpulse
+    plan: free
